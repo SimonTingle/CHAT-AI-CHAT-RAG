@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+client/node_modules/
+backend/node_modules/
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Logs
+logs/
+*.log
+backend/logs/
+
+# Database
+*.db
+*.db-journal
+backend/db/*.db
+backend/db/*.db-journal
+
+# Vector store
+backend/vectorstore/
+
+# Build outputs
+dist/
+build/
+client/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Backup files
+*.bak
+*.tmp
+*.corrupt
+backup/

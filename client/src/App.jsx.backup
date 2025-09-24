@@ -1,0 +1,154 @@
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+import './index.css';
+
+function App() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [userId, setUserId] = useState('');
+
+  // Initialize user ID
+  useEffect(() => {
+    const storedUserId = localStorage.getItem('chatUserId');
+    if (storedUserId) {
+      setUserId(storedUserId);
+    } else {
+      const newUserId = 'user_' + Math.random().toString(36).substring(2, 9);
+      setUserId(newUserId);
+      localStorage.setItem('chatUserId', newUserId);
+    }
+  }, []);
+
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    
+    const userMessage = { role: 'user', content: input, id: Date.now() };
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const response = await axios.post('http://localhost:3000/chat', {
+        prompt: input,
+        userId: userId
+      });
+
+      const assistantMessage = { 
+        role: 'assistant', 
+        content: response.data.reply,
+        id: Date.now() + 1
+      };
+      
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error('Chat error:', error);
+      const errorMessage = {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error. Please try again.',
+        id: Date.now() + 1
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportLogs = async () => {
+    try {
+      const response = await axios.get('http://localhost:3000/export-logs', {
+        headers: { 'x-user-id': userId }
+      });
+      
+      const blob = new Blob([response.data.logs], { type: 'text/plain' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `chat_logs_${userId}_${new Date().toISOString().split('T')[0]}.txt`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export error:', error);
+      alert('Failed to export logs');
+    }
+  };
+
+  const clearChat = () => {
+    setMessages([]);
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center p-4">
+      <div className="w-full max-w-4xl bg-gray-800 rounded-lg shadow-lg p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold text-ai-primary">AI Chatbot</h1>
+          <div className="text-sm text-gray-400">User: {userId}</div>
+        </div>
+        
+        <div className="bg-gray-700 rounded-lg p-4 mb-4 h-96 overflow-y-auto">
+          {messages.length === 0 ? (
+            <div className="text-center text-gray-400 h-full flex items-center justify-center">
+              <div>
+                <div className="text-2xl mb-2">🤖</div>
+                <p>Start a conversation with the AI assistant</p>
+              </div>
+            </div>
+          ) : (
+            messages.map((msg) => (
+              <div key={msg.id} className={`mb-3 ${msg.role === 'user' ? 'text-right' : 'text-left'}`}>
+                <div className={`inline-block max-w-xs lg:max-w-md xl:max-w-lg 2xl:max-w-xl p-3 rounded-lg ${
+                  msg.role === 'user' ? 'bg-ai-primary text-white' : 'bg-gray-600 text-white'
+                }`}>
+                  {msg.content}
+                </div>
+              </div>
+            ))
+          )}
+          {loading && (
+            <div className="text-left mb-3">
+              <div className="inline-block bg-gray-600 text-white p-3 rounded-lg">
+                Thinking<span className="loading-dots"></span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-2 mb-4">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+            className="flex-1 p-3 rounded-lg bg-gray-600 text-white border-none focus:outline-none focus:ring-2 focus:ring-ai-primary"
+            placeholder="Type your message..."
+            disabled={loading}
+          />
+          <button
+            onClick={sendMessage}
+            disabled={loading}
+            className="px-6 py-3 bg-ai-primary rounded-lg hover:bg-ai-secondary transition disabled:opacity-50"
+          >
+            {loading ? 'Sending...' : 'Send'}
+          </button>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={clearChat}
+            className="px-4 py-2 bg-yellow-500 rounded-lg hover:bg-yellow-600 transition"
+          >
+            Clear Chat
+          </button>
+          <button
+            onClick={exportLogs}
+            className="px-4 py-2 bg-green-500 rounded-lg hover:bg-green-600 transition"
+          >
+            Export Logs
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
