@@ -1,17 +1,17 @@
 {
-  "name": "chatbotai-clean",
-  "version": "2.0.0",
+  "name": "chat-ai-chat-rag",
+  "version": "1.0.0",
   "description": "AI Chatbot with RAG and Memory - Clean Version",
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "cd backend && nodemon server.js",
     "dev:frontend": "cd client && npm run dev",
     "build": "cd client && npm run build",
+    "setup": "npm install && cd client && npm install && cd ../backend && npm install",
     "start": "node backend/server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "docker:build": "docker-compose build",
     "docker:up": "docker-compose up -d",
-    "setup": "npm install && cd client && npm install",
     "clean": "rm -rf node_modules client/node_modules backend/node_modules"
   },
   "dependencies": {
@@ -29,7 +29,13 @@
     "concurrently": "^8.2.2",
     "nodemon": "^3.0.1"
   },
-  "keywords": ["ai", "chatbot", "rag", "memory", "ollama"],
+  "keywords": [
+    "ai",
+    "chatbot",
+    "rag",
+    "memory",
+    "ollama"
+  ],
   "author": "Simon Tingle",
   "license": "ISC"
 }

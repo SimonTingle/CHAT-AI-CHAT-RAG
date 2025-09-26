@@ -1,0 +1,52 @@
+/* Add to your client/src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Add smooth animations from the app.css */
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .logo-spin {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+/* Enhanced chat animations */
+.chat-message {
+  transition: all 0.3s ease-in-out;
+}
+
+.chat-message:hover {
+  transform: translateY(-1px);
+}
+
+/* Loading animation */
+.thinking-dots::after {
+  content: '';
+  animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60% { content: '...'; }
+  80%, 100% { content: ''; }
+}

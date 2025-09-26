@@ -554,3 +554,206 @@ server.on('error', (error) => {
         process.exit(1);
     }
 });
+function authenticateUser(req, res, next) {
+  // Development mode bypass
+  if (process.env.NODE_ENV === 'development' && process.env.DISABLE_AUTH === 'true') {
+    return next();
+  }
+
+  const userId = req.body?.userId || req.headers['x-user-id'] || req.query.userId;
+  
+  if (!userId) {
+    return res.status(401).json({ 
+      error: 'Authentication required',
+      message: 'Please provide a valid user ID'
+    });
+  }
+
+  // Basic validation
+  if (typeof userId !== 'string' || userId.length > 100) {
+    return res.status(400).json({ error: 'Invalid user ID format' });
+  }
+
+  req.userId = userId;
+  next();
+}
+
+module.exports = { authenticateUser };
+// Simple DB functions
+function initDB() {
+    console.log('Database initialized');
+}
+
+async function saveMessage(userId, role, content) {
+    console.log(`Saving message for ${userId}: ${role} - ${content}`);
+}
+
+async function getChatHistory(userId) {
+    console.log(`Getting chat history for ${userId}`);
+    return [];
+}
+
+module.exports = { initDB, saveMessage, getChatHistory };
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
+
+function normalize(x) {
+  return String(x || '').trim();
+}
+
+function saveMemory(userId, key, value) {
+  userId = normalize(userId);
+  key = normalize(key);
+  value = normalize(value);
+
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(path.join(__dirname, 'db', 'chat.db'));
+    db.run(
+      `INSERT INTO memory (userId, key, value, timestamp)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(userId, key) DO UPDATE SET
+         value=excluded.value,
+         timestamp=CURRENT_TIMESTAMP`,
+      [userId, key, value],
+      function (err) {
+        db.close();
+        if (err) {
+          console.error('saveMemory error:', err);
+          return reject(err);
+        }
+        resolve({ changes: this.changes });
+      }
+    );
+  });
+}
+
+function getMemory(userId) {
+  userId = normalize(userId);
+  return new Promise((resolve) => {
+    const db = new sqlite3.Database(path.join(__dirname, 'db', 'chat.db'));
+    db.all('SELECT key, value FROM memory WHERE userId = ?', [userId], (err, rows) => {
+      db.close();
+      if (err) {
+        console.error('getMemory error:', err);
+        return resolve([]);
+      }
+      resolve(rows || []);
+    });
+  });
+}
+
+module.exports = { saveMemory, getMemory };
+// Simple RAG functions
+async function initVectorStore() {
+    console.log('Vector store initialized');
+    return {};
+}
+
+async function queryVectorStore(prompt, vectorStore) {
+    console.log(`Querying vector store with: ${prompt}`);
+    return '';
+}
+
+async function addDocument(text, metadata, vectorStore) {
+    console.log(`Adding document: ${text.substring(0, 50)}...`);
+    return true;
+}
+
+async function getVectorStoreStats(vectorStore) {
+    return { documentCount: 0 };
+}
+
+module.exports = { initVectorStore, queryVectorStore, addDocument, getVectorStoreStats };
+function authenticateUser(req, res, next) {
+  console.log('Authenticating user...');
+  next(); // allow all for now
+}
+
+module.exports = authenticateUser;
+// test_chat.js
+const fetch = require('node-fetch');
+
+async function testChat() {
+  console.log('🧪 Testing Chat Functionality...\n');
+
+  // Test 1: Check Ollama
+  console.log('1. Testing Ollama connection...');
+  try {
+    const ollamaResponse = await fetch('http://localhost:11434/api/tags');
+    if (ollamaResponse.ok) {
+      const models = await ollamaResponse.json();
+      console.log('✅ Ollama is running. Models:', models.models.map(m => m.name));
+    } else {
+      console.log('❌ Ollama not responding');
+      return;
+    }
+  } catch (error) {
+    console.log('❌ Cannot connect to Ollama:', error.message);
+    return;
+  }
+
+  // Test 2: Test Ollama generate
+  console.log('\n2. Testing Ollama generate...');
+  try {
+    const generateResponse = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama3.1:8b',
+        prompt: 'Say "TEST PASSED" if you can hear me.',
+        stream: false
+      })
+    });
+    
+    if (generateResponse.ok) {
+      const data = await generateResponse.json();
+      console.log('✅ Ollama generate works:', data.response);
+    } else {
+      console.log('❌ Ollama generate failed:', generateResponse.status);
+    }
+  } catch (error) {
+    console.log('❌ Ollama generate error:', error.message);
+  }
+
+  // Test 3: Test your chat endpoint
+  console.log('\n3. Testing your chat endpoint...');
+  try {
+    const chatResponse = await fetch('http://localhost:3000/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'Hello, please respond with "CHAT WORKING"',
+        userId: 'diagnostic-test'
+      })
+    });
+    
+    if (chatResponse.ok) {
+      const data = await chatResponse.json();
+      console.log('✅ Chat endpoint response:', data);
+    } else {
+      console.log('❌ Chat endpoint failed:', chatResponse.status, await chatResponse.text());
+    }
+  } catch (error) {
+    console.log('❌ Chat endpoint error:', error.message);
+  }
+
+  console.log('\n🎯 Diagnostic complete.');
+}
+
+testChat();
+const { saveMemory, getMemory } = require('./memory');
+
+async function test() {
+  try {
+    console.log('Testing memory functions...');
+    await saveMemory('test-user', 'test-key', 'test-value');
+    console.log('Save successful');
+    
+    const result = await getMemory('test-user');
+    console.log('Retrieved memory:', result);
+  } catch (error) {
+    console.error('Test failed:', error);
+  }
+}
+
+test();
