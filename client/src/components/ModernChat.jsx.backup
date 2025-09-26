@@ -75,43 +75,32 @@ const ModernChat = () => {
   }
 
   const processFiles = async (files) => {
-  setDocumentStatus('Processing documents...')
-  
-  try {
-    for (const file of files) {
-      if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
-        const text = await file.text()
-        const metadata = {
-          fileName: file.name,
-          fileSize: file.size,
-          fileType: file.type,
-          lastModified: new Date(file.lastModified).toISOString()
-        }
-        
-        try {
-          await addDocument(text, metadata, 'default-user')
-          console.log(`✅ Successfully processed: ${file.name}`)
-          setDocumentStatus(`✅ Processed: ${file.name}`)
-        } catch (err) {
-          console.error(`❌ Failed to process ${file.name}:`, err)
-          setDocumentStatus(`❌ Failed: ${file.name} - ${err.message}`)
-          throw err; // Re-throw to stop processing
-        }
-      } else {
-        setDocumentStatus(`❌ Unsupported file type: ${file.name}`)
-      }
-    }
+    setDocumentStatus('Processing documents...')
     
-    // Success - show completion message
-    setDocumentStatus(`✅ All documents processed successfully (${files.length} files)`)
-    setTimeout(() => setDocumentStatus(''), 3000)
-  } catch (err) {
-    console.error('❌ Error processing files:', err)
-    setDocumentStatus(`❌ Error: ${err.message}`)
-    setTimeout(() => setDocumentStatus(''), 5000)
+    try {
+      for (const file of files) {
+        if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+          const text = await file.text()
+          const metadata = {
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            lastModified: new Date(file.lastModified).toISOString()
+          }
+          
+          await addDocument(text, metadata)
+          setDocumentStatus(`✅ Processed: ${file.name}`)
+        } else {
+          setDocumentStatus(`❌ Unsupported file type: ${file.name}`)
+        }
+      }
+      
+      setTimeout(() => setDocumentStatus(''), 3000)
+    } catch (err) {
+      setDocumentStatus(`❌ Error: ${err.message}`)
+      setTimeout(() => setDocumentStatus(''), 5000)
+    }
   }
-}
-
 
   const formatMessageContent = (content) => {
     return content.split('\n').map((line, i) => (

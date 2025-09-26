@@ -3,8 +3,17 @@ import { useChat } from '../hooks/useChat'
 import { chatService } from '../services/chatService'
 
 const ModernChat = () => {
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
   const [input, setInput] = useState('')
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
   const [isDragging, setIsDragging] = useState(false)
+  const messagesEndRef = useRef(null)
   const [documentStatus, setDocumentStatus] = useState('')
   const [ragStats, setRagStats] = useState(null)
   const [showRagStats, setShowRagStats] = useState(false)
@@ -75,43 +84,32 @@ const ModernChat = () => {
   }
 
   const processFiles = async (files) => {
-  setDocumentStatus('Processing documents...')
-  
-  try {
-    for (const file of files) {
-      if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
-        const text = await file.text()
-        const metadata = {
-          fileName: file.name,
-          fileSize: file.size,
-          fileType: file.type,
-          lastModified: new Date(file.lastModified).toISOString()
-        }
-        
-        try {
-          await addDocument(text, metadata, 'default-user')
-          console.log(`✅ Successfully processed: ${file.name}`)
-          setDocumentStatus(`✅ Processed: ${file.name}`)
-        } catch (err) {
-          console.error(`❌ Failed to process ${file.name}:`, err)
-          setDocumentStatus(`❌ Failed: ${file.name} - ${err.message}`)
-          throw err; // Re-throw to stop processing
-        }
-      } else {
-        setDocumentStatus(`❌ Unsupported file type: ${file.name}`)
-      }
-    }
+    setDocumentStatus('Processing documents...')
     
-    // Success - show completion message
-    setDocumentStatus(`✅ All documents processed successfully (${files.length} files)`)
-    setTimeout(() => setDocumentStatus(''), 3000)
-  } catch (err) {
-    console.error('❌ Error processing files:', err)
-    setDocumentStatus(`❌ Error: ${err.message}`)
-    setTimeout(() => setDocumentStatus(''), 5000)
+    try {
+      for (const file of files) {
+        if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+          const text = await file.text()
+          const metadata = {
+            fileName: file.name,
+            fileSize: file.size,
+            fileType: file.type,
+            lastModified: new Date(file.lastModified).toISOString()
+          }
+          
+          await addDocument(text, metadata)
+          setDocumentStatus(`✅ Processed: ${file.name}`)
+        } else {
+          setDocumentStatus(`❌ Unsupported file type: ${file.name}`)
+        }
+      }
+      
+      setTimeout(() => setDocumentStatus(''), 3000)
+    } catch (err) {
+      setDocumentStatus(`❌ Error: ${err.message}`)
+      setTimeout(() => setDocumentStatus(''), 5000)
+    }
   }
-}
-
 
   const formatMessageContent = (content) => {
     return content.split('\n').map((line, i) => (
@@ -216,7 +214,7 @@ const ModernChat = () => {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar scrollbar-thumb-gray-600 scrollbar-track-gray-800">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-500">
             <div className="text-4xl mb-4">🤖</div>
