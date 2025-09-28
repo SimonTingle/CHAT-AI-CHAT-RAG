@@ -1,0 +1,168 @@
+const fs = require('fs').promises;
+const path = require('path');
+
+// Global vector store that will be shared
+let vectorStore = {
+  documents: [],
+  vectors: []
+};
+
+async function initVectorStore() {
+  console.log('🔄 Initializing vector store');
+  
+  try {
+    // Create vectorstore directory if it doesn't exist
+    await fs.mkdir(path.join(__dirname, 'vectorstore'), { recursive: true });
+    
+    // Load existing documents if any
+    const docsPath = path.join(__dirname, 'vectorstore', 'documents.json');
+    try {
+      const data = await fs.readFile(docsPath, 'utf8');
+      const loadedData = JSON.parse(data);
+      vectorStore.documents = loadedData.documents || [];
+      vectorStore.vectors = loadedData.vectors || [];
+      console.log(`✅ Loaded ${vectorStore.documents.length} documents from storage`);
+    } catch (err) {
+      console.log('ℹ️  No existing vector store found, starting fresh');
+      vectorStore = { documents: [], vectors: [] }; // Reset to empty
+    }
+  } catch (err) {
+    console.error('❌ Error initializing vector store:', err);
+    vectorStore = { documents: [], vectors: [] };
+  }
+  
+  console.log(`📊 Vector store initialized with ${vectorStore.documents.length} documents`);
+  return vectorStore;
+}
+
+async function saveVectorStore() {
+  try {
+    const docsPath = path.join(__dirname, 'vectorstore', 'documents.json');
+    await fs.writeFile(docsPath, JSON.stringify(vectorStore, null, 2));
+    console.log(`💾 Vector store saved (${vectorStore.documents.length} documents)`);
+    return true;
+  } catch (err) {
+    console.error('❌ Error saving vector store:', err);
+    return false;
+  }
+}
+
+// Simple text-to-vector simulation
+function textToVector(text) {
+  const words = text.toLowerCase().split(/\W+/).filter(word => word.length > 0);
+  const vector = new Array(128).fill(0);
+  
+  words.slice(0, 100).forEach((word) => {
+    let hash = 0;
+    for (let i = 0; i < Math.min(word.length, 10); i++) {
+      hash = ((hash << 5) - hash + word.charCodeAt(i)) & 0xffffffff;
+    }
+    const vectorIndex = Math.abs(hash) % 128;
+    vector[vectorIndex] += 1;
+  });
+  
+  return vector;
+}
+
+async function addDocument(text, metadata, storeRef) {
+  try {
+    console.log(`📄 Adding document: ${text.substring(0, 50)}...`);
+    
+    const targetStore = storeRef || vectorStore;
+    const vector = textToVector(text);
+    const document = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+      text: text,
+      metadata: metadata || {},
+      createdAt: new Date().toISOString(),
+      vector: vector
+    };
+    
+    targetStore.documents.push(document);
+    targetStore.vectors.push(vector);
+    
+    // Save to persistent storage
+    const success = await saveVectorStore();
+    
+    if (success) {
+      console.log(`✅ Document added successfully. Total documents: ${targetStore.documents.length}`);
+    } else {
+      console.log(`⚠️  Document added to memory but save failed`);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Error adding document:', error);
+    return false;
+  }
+}
+
+async function queryVectorStore(prompt, storeRef) {
+  try {
+    console.log(`🔍 Querying vector store with: ${prompt.substring(0, 50)}...`);
+    
+    const targetStore = storeRef || vectorStore;
+    
+    if (!targetStore.documents || targetStore.documents.length === 0) {
+      return "No documents available to search.";
+    }
+    
+    const queryVector = textToVector(prompt);
+    
+    // Simple similarity search
+    let bestMatch = null;
+    let bestScore = -1;
+    
+    for (let i = 0; i < targetStore.documents.length; i++) {
+      const doc = targetStore.documents[i];
+      const score = calculateSimilarity(queryVector, doc.vector);
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = doc;
+      }
+    }
+    
+    if (bestMatch && bestScore > 0.01) {
+      return `📚 Relevant content found:\n${bestMatch.text.substring(0, 300)}${bestMatch.text.length > 300 ? '...' : ''}`;
+    } else {
+      return "No relevant documents found for your query.";
+    }
+  } catch (error) {
+    console.error('❌ Error querying vector store:', error);
+    return "Error searching documents.";
+  }
+}
+
+function calculateSimilarity(vec1, vec2) {
+  let dotProduct = 0;
+  let mag1 = 0;
+  let mag2 = 0;
+  
+  const minLength = Math.min(vec1.length, vec2.length);
+  for (let i = 0; i < minLength; i++) {
+    dotProduct += vec1[i] * vec2[i];
+    mag1 += vec1[i] * vec1[i];
+    mag2 += vec2[i] * vec2[i];
+  }
+  
+  mag1 = Math.sqrt(mag1);
+  mag2 = Math.sqrt(mag2);
+  
+  if (mag1 === 0 || mag2 === 0) return 0;
+  
+  return dotProduct / (mag1 * mag2);
+}
+
+async function getVectorStoreStats(storeRef) {
+  const targetStore = storeRef || vectorStore;
+  
+  return { 
+    documentCount: targetStore.documents ? targetStore.documents.length : 0,
+    vectorCount: targetStore.vectors ? targetStore.vectors.length : 0,
+    dimensions: targetStore.vectors && targetStore.vectors.length > 0 ? 
+                targetStore.vectors[0].length : 0
+  };
+}
+
+module.exports = { initVectorStore, queryVectorStore, addDocument, getVectorStoreStats };

@@ -1,0 +1,565 @@
+const express = require('express');
+const cors = require('cors');
+const fetch = require('node-fetch');
+const path = require('path');
+const fs = require('fs');
+const http = require('http');
+const socketIo = require('socket.io');
+const dotenv = require('dotenv');
+
+dotenv.config();
+
+// Import modules
+const { saveMemory, getMemory } = require('./memory');
+const { initDB, saveMessage, getChatHistory } = require('./db');
+const { initVectorStore, queryVectorStore, addDocument, getVectorStoreStats } = require('./rag');
+const { authenticateUser } = require('./auth');
+const { startWs } = require('./ws-server');
+
+// Configuration
+const LOG_DIR = path.join(__dirname, 'logs');
+const PORT = process.env.PORT || 3001;
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral:7b';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+
+// Ensure logs directory exists
+if (!fs.existsSync(LOG_DIR)) {
+    try {
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+        console.log('✅ Logs directory created');
+    } catch (error) {
+        console.error('❌ Failed to create logs directory:', error.message);
+    }
+}
+
+// Initialize app and server
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: {
+        origin: ["http://localhost:3000", "http://localhost:5173", "http://localhost:3001"],
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000
+});
+
+// Middleware with error handling
+app.use(cors({
+    origin: ["http://localhost:3000", "http://localhost:5173", "http://localhost:3001"],
+    credentials: true
+}));
+
+app.use(express.json({ 
+    limit: '10mb',
+    type: ['application/json', 'text/plain']
+}));
+
+app.use(express.urlencoded({ 
+    extended: true, 
+    limit: '10mb' 
+}));
+
+// Request logging middleware
+app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${req.method} ${req.path} - IP: ${req.ip}`);
+    
+    // Log response time
+    const start = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} ${res.statusCode} - ${duration}ms`);
+    });
+    
+    next();
+});
+
+// Enhanced safe response handler
+function safeJson(res, status, payload) {
+    if (res.headersSent) {
+        console.warn(`⚠️ Attempted to send response after headers were sent for ${res.req?.method} ${res.req?.path}`);
+        return;
+    }
+    
+    try {
+        res.status(status).json(payload);
+    } catch (error) {
+        console.error('❌ Error sending JSON response:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to send response' });
+        }
+    }
+}
+
+// Global error handler
+app.use((error, req, res, next) => {
+    console.error('🚨 Global error handler:', error);
+    
+    if (res.headersSent) {
+        return next(error);
+    }
+    
+    safeJson(res, 500, { 
+        error: 'Internal server error',
+        message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
+});
+
+// Initialize databases with error handling
+console.log('🗄️ Initializing databases...');
+try {
+    initDB();
+    console.log('✅ Database initialized successfully');
+} catch (error) {
+    console.error('❌ Database initialization failed:', error);
+}
+
+// Initialize vector store with error handling
+let vectorStore = null;
+(async () => {
+    try {
+        console.log('📊 Initializing vector store...');
+        vectorStore = await initVectorStore();
+        console.log('✅ Vector store initialized successfully');
+    } catch (error) {
+        console.error('❌ Vector store initialization failed:', error);
+        vectorStore = null;
+    }
+})();
+
+// Utility function to validate request body
+function validateRequestBody(body, requiredFields) {
+    const errors = [];
+    for (const field of requiredFields) {
+        if (body[field] === undefined || body[field] === null) {
+            errors.push(`Missing required field: ${field}`);
+        }
+    }
+    return errors;
+}
+
+// Utility function to sanitize input
+function sanitizeInput(input) {
+    if (typeof input !== 'string') return '';
+    return input.trim().substring(0, 10000); // Limit length
+}
+
+// HEALTH CHECK ENDPOINTS
+app.get('/health', (req, res) => {
+    const healthCheck = {
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        version: process.env.npm_package_version || '2.0.0',
+        memory: {
+            rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + ' MB',
+            heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB'
+        }
+    };
+    safeJson(res, 200, healthCheck);
+});
+
+app.get('/ready', (req, res) => {
+    const isReady = vectorStore !== null;
+    safeJson(res, isReady ? 200 : 503, { 
+        status: isReady ? 'ready' : 'not ready',
+        vectorStore: vectorStore !== null
+    });
+});
+
+// SIMPLE TEST ENDPOINT
+app.get('/test', (req, res) => {
+    safeJson(res, 200, { 
+        message: 'Server is running!',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// OLLAMA HEALTH CHECK
+app.get('/api/ollama/health', async (req, res) => {
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        
+        const response = await fetch(`${OLLAMA_URL}/api/tags`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            throw new Error(`Ollama API returned ${response.status}`);
+        }
+        
+        const data = await response.json();
+        safeJson(res, 200, { 
+            status: 'ok', 
+            models: data.models?.length || 0,
+            ollamaUrl: OLLAMA_URL
+        });
+    } catch (error) {
+        console.error('❌ Ollama health check failed:', error);
+        safeJson(res, 503, { 
+            status: 'error', 
+            error: error.message,
+            ollamaUrl: OLLAMA_URL
+        });
+    }
+});
+
+// CHAT ENDPOINT with comprehensive error handling
+function authenticateUser(req, res, next) {
+  console.log('Authenticating user...');
+  next();
+}
+app.post('/chat', authenticateUser, async (req, res) => {
+  const startTime = Date.now();
+  console.log('Received /chat request:', req.body);
+  res.json({ reply: `Echo: ${req.body.prompt}` });
+});
+
+    
+    
+    try {
+        // Validate request
+        const errors = validateRequestBody(req.body, ['prompt']);
+        if (errors.length > 0) {
+            return safeJson(res, 400, { error: 'Validation failed', details: errors });
+        }
+
+        const { prompt, userId = 'default' } = req.body;
+        const sanitizedPrompt = sanitizeInput(prompt);
+        
+        if (!sanitizedPrompt) {
+            return safeJson(res, 400, { error: 'Prompt is required and must be a non-empty string' });
+        }
+
+        console.log(`💬 Chat request from user ${userId}: ${sanitizedPrompt.substring(0, 50)}...`);
+
+        // Load memory and history with error boundaries
+        let memoryFacts = [];
+        let history = [];
+        
+        try {
+            memoryFacts = await getMemory(userId);
+            history = await getChatHistory(userId);
+        } catch (error) {
+            console.warn(`⚠️ Failed to load memory/history for user ${userId}:`, error.message);
+            memoryFacts = [];
+            history = [];
+        }
+        
+        // RAG context with error handling
+        let context = '';
+        if (vectorStore) {
+            try {
+                context = await queryVectorStore(sanitizedPrompt, vectorStore) || '';
+            } catch (error) {
+                console.warn('⚠️ RAG query failed:', error.message);
+                context = '';
+            }
+        }
+
+        // Build prompt with memory and context
+        const memoryContext = Array.isArray(memoryFacts) 
+            ? memoryFacts.map(f => `${f.key}: ${f.value}`).join('\n')
+            : '';
+            
+        const fullPrompt = `Known facts:\n${memoryContext}\n\nContext: ${context}\nUser: ${sanitizedPrompt}`;
+
+        // Save user message with error handling
+        try {
+            await saveMessage(userId, 'user', sanitizedPrompt);
+        } catch (error) {
+            console.error(`❌ Failed to save user message for ${userId}:`, error.message);
+        }
+
+        // Enhanced Ollama call with comprehensive error handling
+        let aiResponse = 'Sorry, I encountered an error. Please try again.';
+        let ollamaSuccess = false;
+
+        try {
+            console.log(`📤 Sending to Ollama: ${OLLAMA_MODEL}`);
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+            
+            const response = await fetch(`${OLLAMA_URL}/api/generate`, {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: OLLAMA_MODEL,
+                    prompt: fullPrompt,
+                    stream: false,
+                    options: {
+                        temperature: 0.7,
+                        top_p: 0.9,
+                        stop: []
+                    }
+                }),
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                const errorText = await response.text().catch(() => 'Unknown error');
+                const errorMessage = `Ollama request failed: ${response.status} ${errorText}`;
+                console.error('❌', errorMessage);
+                throw new Error(errorMessage);
+            }
+            
+            const data = await response.json();
+            aiResponse = data.response || '[No response from model]';
+            ollamaSuccess = true;
+            console.log('✅ Ollama response received');
+
+        } catch (error) {
+            console.error('❌ Ollama communication error:', error.message);
+            
+            if (error.name === 'AbortError') {
+                aiResponse = 'The request timed out. Please try again.';
+            } else {
+                aiResponse = 'I apologize, but I am having trouble connecting to the AI service. Please check if Ollama is running.';
+            }
+        }
+
+        // Save AI response with error handling
+        try {
+            await saveMessage(userId, 'assistant', aiResponse);
+        } catch (error) {
+            console.error(`❌ Failed to save AI response for ${userId}:`, error.message);
+        }
+
+        // Log chat with error handling
+        try {
+            fs.appendFileSync(
+                path.join(LOG_DIR, 'chat.log'),
+                `[${new Date().toISOString()}] User ${userId}: ${sanitizedPrompt} -> ${aiResponse}\n`
+            );
+        } catch (error) {
+            console.error('❌ Failed to log chat:', error.message);
+        }
+
+        const responseTime = Date.now() - startTime;
+        safeJson(res, 200, { 
+            reply: aiResponse,
+            responseTime: `${responseTime}ms`,
+            ollamaSuccess
+        });
+        
+    } catch (error) {
+        console.error('🚨 Chat endpoint error:', error);
+        
+        // Log error to file
+        try {
+            fs.appendFileSync(
+                path.join(LOG_DIR, 'errors.log'),
+                `[${new Date().toISOString()}] Chat error: ${error.message}\n${error.stack}\n\n`
+            );
+        } catch (logError) {
+            console.error('❌ Failed to log error:', logError.message);
+        }
+        
+        safeJson(res, 500, { 
+            error: 'Chat processing failed',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+        });
+    }
+;
+
+// DOCUMENT UPLOAD ENDPOINT with robust error handling
+app.post('/api/documents', authenticateUser, async (req, res) => {
+    try {
+        // Validate request
+        const errors = validateRequestBody(req.body, ['text']);
+        if (errors.length > 0) {
+            return safeJson(res, 400, { error: 'Validation failed', details: errors });
+        }
+
+        const { text, metadata = {}, userId = 'default' } = req.body;
+        const sanitizedText = sanitizeInput(text);
+        
+        if (!sanitizedText) {
+            return safeJson(res, 400, { error: 'Document text is required' });
+        }
+
+        // Check if vector store is initialized
+        if (!vectorStore) {
+            return safeJson(res, 503, { error: 'Vector store not ready. Please try again in a moment.' });
+        }
+
+        console.log(`📄 Processing document upload for user ${userId}`);
+
+        const success = await addDocument(sanitizedText, metadata, vectorStore);
+        
+        if (success) {
+            // Log the document addition
+            try {
+                fs.appendFileSync(
+                    path.join(LOG_DIR, 'documents.log'),
+                    `[${new Date().toISOString()}] User ${userId} added: ${metadata?.fileName || 'unknown'}\n`
+                );
+            } catch (error) {
+                console.error('❌ Failed to log document upload:', error.message);
+            }
+            
+            safeJson(res, 200, { 
+                success: true, 
+                message: 'Document added to knowledge base',
+                documentId: metadata.fileName 
+            });
+        } else {
+            safeJson(res, 500, { error: 'Failed to process document' });
+        }
+    } catch (error) {
+        console.error('🚨 Document upload error:', error);
+        
+        // Log error to file
+        try {
+            fs.appendFileSync(
+                path.join(LOG_DIR, 'errors.log'),
+                `[${new Date().toISOString()}] Document upload error: ${error.message}\n${error.stack}\n\n`
+            );
+        } catch (logError) {
+            console.error('❌ Failed to log error:', logError.message);
+        }
+        
+        safeJson(res, 500, { 
+            error: 'Document upload failed',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+        });
+    }
+});
+
+// RAG STATS ENDPOINT
+app.get('/api/rag/stats', async (req, res) => {
+    try {
+        if (!vectorStore) {
+            return safeJson(res, 503, { error: 'Vector store not initialized' });
+        }
+        
+        const stats = await getVectorStoreStats(vectorStore);
+        safeJson(res, 200, stats);
+    } catch (error) {
+        console.error('🚨 RAG stats error:', error);
+        safeJson(res, 500, { 
+            error: 'Failed to retrieve RAG statistics',
+            message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+        });
+    }
+});
+
+// Export logs endpoint
+app.get('/export-logs', authenticateUser, (req, res) => {
+    try {
+        const logPath = path.join(LOG_DIR, 'chat.log');
+        if (!fs.existsSync(logPath)) {
+            return safeJson(res, 404, { error: 'No logs found' });
+        }
+        
+        const logs = fs.readFileSync(logPath, 'utf8');
+        safeJson(res, 200, { logs });
+    } catch (error) {
+        console.error('🚨 Log export error:', error);
+        safeJson(res, 500, { error: 'Failed to read logs' });
+    }
+});
+
+// Memory endpoints with error handling
+app.post('/remember', authenticateUser, async (req, res) => {
+    try {
+        const errors = validateRequestBody(req.body, ['key', 'value']);
+        if (errors.length > 0) {
+            return safeJson(res, 400, { error: 'Validation failed', details: errors });
+        }
+
+        const { userId = 'default', key, value } = req.body;
+        const sanitizedKey = sanitizeInput(key);
+        const sanitizedValue = sanitizeInput(value);
+        
+        if (!sanitizedKey || sanitizedValue === undefined) {
+            return safeJson(res, 400, { error: 'Key and value are required' });
+        }
+
+        await saveMemory(userId, sanitizedKey, sanitizedValue);
+        safeJson(res, 200, { message: `Remembered ${sanitizedKey}: ${sanitizedValue}` });
+    } catch (error) {
+        console.error('🚨 Memory save error:', error);
+        safeJson(res, 500, { error: 'Failed to remember information' });
+    }
+});
+
+app.get('/memory', authenticateUser, async (req, res) => {
+    try {
+        const userId = req.query.userId || 'default';
+        const memory = await getMemory(userId);
+        safeJson(res, 200, { memory });
+    } catch (error) {
+        console.error('🚨 Memory fetch error:', error);
+        safeJson(res, 500, { error: 'Failed to fetch memory' });
+    }
+});
+
+// 404 handler - Fixed version
+app.use((req, res) => {
+    safeJson(res, 404, { 
+        error: 'Endpoint not found',
+        path: req.originalUrl,
+        method: req.method
+    });
+});
+
+// Start WebSocket server with error handling
+let wss = null;
+try {
+    wss = startWs(server);
+    console.log('✅ WebSocket server initialized');
+} catch (error) {
+    console.error('❌ WebSocket server initialization failed:', error);
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('🛑 SIGTERM received, shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+    
+    // Force close after 10 seconds
+    setTimeout(() => {
+        console.error('💥 Force shutdown');
+        process.exit(1);
+    }, 10000);
+});
+
+process.on('SIGINT', () => {
+    console.log('🛑 SIGINT received, shutting down gracefully...');
+    server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+    });
+});
+
+// Start server with error handling
+server.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📊 Health check: http://localhost:${PORT}/health`);
+    console.log(`📈 Ready check: http://localhost:${PORT}/ready`);
+    console.log(`🔍 Ollama URL: ${OLLAMA_URL}`);
+    console.log(`🤖 Default model: ${OLLAMA_MODEL}`);
+});
+
+// Handle server errors
+server.on('error', (error) => {
+    console.error('🚨 Server error:', error);
+    if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use`);
+        process.exit(1);
+    }
+});

@@ -1,0 +1,24 @@
+FULL BACKUP INFORMATION
+======================
+
+Backup created: Sun 28 Sep 2025 14:37:25 WEST
+Project root: /Users/simontingle/Desktop/WORK/PROGRAMMING/TEST_PROJECTS/chatreactai/CHAT-AI-CHAT-RAG
+Timestamp: 20250928_143724
+
+Contents:
+- Client src directory
+- Client configuration files
+- Backend source files
+- Backend database files
+- Backend vector store
+- Backend logs
+- Root configuration files
+- Scripts directory
+
+Total size:  54M
+
+To restore:
+1. Copy files from backup to respective directories
+2. Run npm install in client and backend directories
+3. Restore database if needed
+4. Check environment variables
